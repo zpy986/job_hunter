@@ -2,3 +2,11 @@ __pycache__/
 *.pyc
 .DS_Store
 *.jsonl
+
+# Local-only skill files
+SKILL.md
+templates/
+scripts/
+references/peiyi-profile.md
+references/resume-builder.md
+references/match-rubric.md

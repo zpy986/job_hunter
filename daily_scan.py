@@ -100,7 +100,6 @@ def main():
         "fetch_readme_jobs.py",
         "--sections", "ai_ml,embedded,sre,backend",
         "--visa-only",
-        "--max-days", "0",
     ])
     fresh_count = 0
     if result and result.get("ok"):
