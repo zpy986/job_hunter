@@ -89,6 +89,7 @@ def main():
                 "score":          j.get("score"),
                 "matched_skills": j.get("matched_skills", [])[:6],
                 "source":         "scored",
+                "scan_date":      datetime.now(timezone.utc).strftime("%Y-%m-%d"),
                 "fetched_at":     datetime.now(timezone.utc).isoformat(),
             })
     print(f"  → {scored_count} scored jobs (≥65)", file=sys.stderr)
@@ -123,6 +124,7 @@ def main():
                 "score":          None,
                 "matched_skills": [],
                 "source":         "fresh",
+                "scan_date":      datetime.now(timezone.utc).strftime("%Y-%m-%d"),
                 "fetched_at":     datetime.now(timezone.utc).isoformat(),
             })
     print(f"  → {fresh_count} fresh jobs (today, unscored)", file=sys.stderr)
