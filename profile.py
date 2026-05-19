@@ -13,9 +13,12 @@ TARGET_SECTIONS = {
 }
 
 SKIP_TITLE_KW = [
+    # seniority
     "senior ", "sr.", "principal", "staff engineer", "director",
     "manager", "head of", " vp ", "vice president",
+    # experience gate
     "5+ years", "6+ years", "7+ years", "8+ years",
+    # non-SW roles
     "it support", "helpdesk", "data center engineer",
     "civil ", "structural", "mechanical engi", "thermal engi",
     "munitions", "weapons", "flight dynamics", "satellite systems",
@@ -23,13 +26,34 @@ SKIP_TITLE_KW = [
     "quality engineer", "manufacturing", "customer quality",
     "validation engineer", "clearance required", "secret clearance",
     "program manager", "sales ", "account ", "field service",
+    # non-tech engineering
+    "hvac", "electrical engineer", "electronics engineer",
+    "hardware engineer", "instrumentation", "propulsion",
+    "facilities", "x-ray", "pharmacology", "pathology",
+    "motor controls", "avionics", "power systems",
+    "thermal ", "explosives", "nuclear",
+    # gov-contractor advisory (not engineering)
+    "sme ", " sme", "seta ", "subject matter",
+    # quant/finance/non-SW research
+    "data analyst", "business intelligence", "business analyst",
+    "data scientist", "quantitative research",
+]
+
+# For fresh/unscored jobs: title must contain at least one of these
+REQUIRE_TITLE_KW = [
+    "software", "swe", "ml ", "machine learning", "ai ", " ai",
+    "embedded", "linux", "kernel", "firmware", "driver",
+    "backend", "platform", "infrastructure", "sre", "devops",
+    "inference", "llm", "nlp", "rag", "research engineer",
+    "systems engineer", "network engineer", "security engineer",
+    "cloud engineer", "data engineer",
 ]
 
 SKIP_COMPANY = [
-    "honeywell",       # confirmed no visa sponsor
-    "sel ",            # US citizen required
-    "schweitzer",      # US citizen required
-    "google",          # 7+ year experience requirement
+    "honeywell",    # confirmed no visa sponsor
+    "sel",          # US citizen required (no trailing space — matches "sel " and "sel")
+    "schweitzer",   # US citizen required
+    "google",       # 7+ year experience requirement
 ]
 
 VISA_KEYWORDS = ["✅", "Sponsor", "🏛", "H-1B"]

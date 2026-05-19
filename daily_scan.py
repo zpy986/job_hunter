@@ -1,112 +1,52 @@
 #!/usr/bin/env python3
 """
-Daily job scan for Peiyi Zhang.
-Fetches new jobs from zapplyjobs repos, filters by profile, outputs JSON.
+Daily job scan — Plan B
+  Source A: fetch_jobs.py  (JSON, scored ≥65, last 24h)
+  Source B: fetch_readme_jobs.py (README, today only, no score — too fresh for JSON)
 
 Usage:
-    python3 daily_scan.py              # output JSON to stdout
+    python3 daily_scan.py              # JSON output to stdout
     python3 daily_scan.py --pretty     # human-readable table
 """
 
 import argparse
-import hashlib
 import json
-import re
+import subprocess
 import sys
-import urllib.request
-import urllib.error
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
-from profile import (
-    TARGET_SECTIONS, SKIP_TITLE_KW, SKIP_COMPANY,
-    VISA_KEYWORDS, MAX_POSTED_DAYS
-)
+DOMAIN_MAP = {
+    "ai_ml":       "AI/ML",
+    "embedded":    "Embedded",
+    "sre":         "Systems",
+    "backend":     "Backend",
+    "swe_generic": "Backend",
+}
 
-README_URLS = [
-    "https://raw.githubusercontent.com/zapplyjobs/New-Grad-Software-Engineering-Jobs-2026/main/README.md",
-    "https://raw.githubusercontent.com/zapplyjobs/New-Grad-Jobs-2026/main/README.md",
-]
-
-
-def fetch(url):
-    req = urllib.request.Request(url, headers={"User-Agent": "peiyi-job-hunter/1.0"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return r.read().decode("utf-8")
-
-
-def parse_posted_days(s):
-    s = s.strip().lower()
-    if s.endswith("d"):
-        try: return int(s[:-1])
-        except: return 999
-    if s.endswith("w"):
-        try: return int(s[:-1]) * 7
-        except: return 999
-    if s.endswith("h") or s.endswith("m") or s.endswith("min"):
-        return 0
-    return 999
-
-
-def clean_company(raw):
-    s = re.sub(r"[🏢🏛🏗]\s*", "", raw)
-    return re.sub(r"\*\*(.+?)\*\*", r"\1", s).strip()
-
-
-def extract_link(raw):
-    m = re.search(r"\]\(([^)]+)\)\s*$", raw.strip())
-    return m.group(1).strip() if m else ""
-
-
-def make_id(company, title, link):
-    return "readme-" + hashlib.md5(f"{company}|{title}|{link}".encode()).hexdigest()[:12]
+from profile import SKIP_TITLE_KW, SKIP_COMPANY, REQUIRE_TITLE_KW
 
 
 def is_relevant(title, company):
     t = title.lower()
     c = company.lower()
-    if any(k in t for k in SKIP_TITLE_KW): return False
-    if any(k in c for k in SKIP_COMPANY): return False
-    return True
+    return not any(k in t for k in SKIP_TITLE_KW) and not any(k in c for k in SKIP_COMPANY)
 
 
-def parse_readme(content):
-    jobs = []
-    blocks = re.split(r"<details>", content)
-    for block in blocks[1:]:
-        m = re.search(r"<summary><h3>[^<]*<strong>([^<]+)</strong>", block)
-        if not m: continue
-        section = m.group(1).strip()
-        domain = TARGET_SECTIONS.get(section)
-        if not domain: continue
-        rows = re.findall(r"^\|(.+)\|$", block, re.MULTILINE)
-        if len(rows) < 2: continue
-        for row in rows[2:]:
-            cells = [c.strip() for c in row.split("|")]
-            if len(cells) < 5: continue
-            company = clean_company(cells[0])
-            title = re.sub(r"\*\*(.+?)\*\*", r"\1", cells[1]).strip()
-            location = cells[2].strip()
-            posted_days = parse_posted_days(cells[3])
-            visa_raw = cells[4]
-            link = extract_link(cells[5]) if len(cells) > 5 else ""
-            if not company or not title: continue
-            if not any(k in visa_raw for k in VISA_KEYWORDS): continue
-            if posted_days > MAX_POSTED_DAYS: continue
-            if not is_relevant(title, company): continue
-            visa_label = "✅ Confirmed" if "✅" in visa_raw else "🏛 H-1B Co"
-            jobs.append({
-                "id": make_id(company, title, link),
-                "title": title,
-                "company": company,
-                "domain": domain,
-                "location": location,
-                "posted": cells[3].strip(),
-                "visa": visa_label,
-                "visa_confirmed": "✅" in visa_raw,
-                "link": link,
-                "fetched_at": datetime.now(timezone.utc).isoformat(),
-            })
-    return jobs
+def has_tech_keyword(title):
+    t = title.lower()
+    return any(k in t for k in REQUIRE_TITLE_KW)
+
+
+def run(args):
+    r = subprocess.run(["python3"] + args, capture_output=True, text=True)
+    if r.returncode not in (0, 4):
+        print(f"[warn] {args[0]}: {r.stderr.strip()[:200]}", file=sys.stderr)
+        return None
+    try:
+        return json.loads(r.stdout)
+    except Exception as e:
+        print(f"[warn] JSON parse error ({args[0]}): {e}", file=sys.stderr)
+        return None
 
 
 def main():
@@ -114,34 +54,100 @@ def main():
     parser.add_argument("--pretty", action="store_true")
     args = parser.parse_args()
 
+    since = (datetime.now(timezone.utc) - timedelta(hours=26)).strftime("%Y-%m-%dT%H:%M:%S")
     all_jobs = []
-    seen_ids = set()
+    seen_links = set()
 
-    for url in README_URLS:
-        repo = url.split("/")[4]
-        try:
-            content = fetch(url)
-            jobs = parse_readme(content)
-            new = [j for j in jobs if j["id"] not in seen_ids]
-            for j in new:
-                seen_ids.add(j["id"])
-                all_jobs.append(j)
-            print(f"[{repo}] {len(new)} new jobs", file=sys.stderr)
-        except urllib.error.URLError as e:
-            print(f"[{repo}] fetch error: {e}", file=sys.stderr)
+    # ── Source A: scored jobs from JSON (≥65) ──────────────────────────────
+    print("Fetching scored jobs...", file=sys.stderr)
+    result = run([
+        "fetch_jobs.py",
+        "--domain", "software",
+        "--since", since,
+        "--min-score", "65",
+        "--visa-only",
+        "--limit", "100",
+    ])
+    scored_count = 0
+    if result and result.get("ok"):
+        for j in result["data"]["jobs"]:
+            link = j.get("apply_link", "")
+            if not link or link in seen_links: continue
+            if not is_relevant(j["title"], j["company"]): continue
+            seen_links.add(link)
+            scored_count += 1
+            all_jobs.append({
+                "id":             j["job_id"],
+                "title":          j["title"],
+                "company":        j["company"],
+                "domain":         DOMAIN_MAP.get(j.get("domain_type", ""), "Backend"),
+                "location":       j.get("location", ""),
+                "posted":         j.get("posted_ago", ""),
+                "visa":           "✅ Confirmed" if j.get("visa_confirmed") else "🏛 H-1B Co",
+                "visa_confirmed": j.get("visa_confirmed", False),
+                "link":           link,
+                "score":          j.get("score"),
+                "matched_skills": j.get("matched_skills", [])[:6],
+                "source":         "scored",
+                "fetched_at":     datetime.now(timezone.utc).isoformat(),
+            })
+    print(f"  → {scored_count} scored jobs (≥65)", file=sys.stderr)
 
-    print(f"Total: {len(all_jobs)} jobs", file=sys.stderr)
+    # ── Source B: today's README jobs (no score, brand new) ────────────────
+    print("Fetching today's fresh jobs...", file=sys.stderr)
+    result = run([
+        "fetch_readme_jobs.py",
+        "--sections", "ai_ml,embedded,sre,backend",
+        "--visa-only",
+        "--max-days", "0",
+    ])
+    fresh_count = 0
+    if result and result.get("ok"):
+        for j in result["data"]["jobs"]:
+            link = j.get("apply_link", "")
+            if not link or link in seen_links: continue
+            if not is_relevant(j["title"], j["company"]): continue
+            if not has_tech_keyword(j["title"]): continue   # positive filter
+            seen_links.add(link)
+            fresh_count += 1
+            all_jobs.append({
+                "id":             j["job_id"],
+                "title":          j["title"],
+                "company":        j["company"],
+                "domain":         DOMAIN_MAP.get(j.get("domain_type", ""), "Backend"),
+                "location":       j.get("location", ""),
+                "posted":         "today",
+                "visa":           "✅ Confirmed" if j.get("visa_confirmed") else "🏛 H-1B Co",
+                "visa_confirmed": j.get("visa_confirmed", False),
+                "link":           link,
+                "score":          None,
+                "matched_skills": [],
+                "source":         "fresh",
+                "fetched_at":     datetime.now(timezone.utc).isoformat(),
+            })
+    print(f"  → {fresh_count} fresh jobs (today, unscored)", file=sys.stderr)
+    print(f"Total: {len(all_jobs)} ({scored_count} scored + {fresh_count} fresh)", file=sys.stderr)
 
     if args.pretty:
-        by_domain = {}
-        for j in all_jobs:
-            by_domain.setdefault(j["domain"], []).append(j)
-        for domain, jobs in sorted(by_domain.items()):
-            print(f"\n── {domain} ({len(jobs)}) ──")
-            for j in sorted(jobs, key=lambda x: x["visa_confirmed"], reverse=True):
-                v = j["visa"]
-                print(f"  {v:15} {j['company']:<25} {j['title'][:45]}")
-                print(f"             {j['link']}")
+        # Sort: scored first (by score desc), then fresh
+        scored = sorted([j for j in all_jobs if j["source"] == "scored"], key=lambda x: -(x["score"] or 0))
+        fresh = [j for j in all_jobs if j["source"] == "fresh"]
+        print(f"\n{'='*70}")
+        print(f"SCORED (≥65) — {len(scored)} jobs")
+        print(f"{'='*70}")
+        for j in scored:
+            v = "✅" if j["visa_confirmed"] else "🏛"
+            skills = ", ".join(j["matched_skills"][:4])
+            print(f"  [{j['score']:2}] {v} {j['company']:<22} {j['title'][:42]}")
+            print(f"       Skills: {skills}")
+            print(f"       {j['link']}")
+        print(f"\n{'='*70}")
+        print(f"FRESH TODAY (unscored) — {len(fresh)} jobs")
+        print(f"{'='*70}")
+        for j in fresh:
+            v = "✅" if j["visa_confirmed"] else "🏛"
+            print(f"  {v} {j['company']:<25} {j['title'][:45]}")
+            print(f"     {j['link']}")
     else:
         print(json.dumps(all_jobs, ensure_ascii=False, indent=2))
 
